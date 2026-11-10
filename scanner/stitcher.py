@@ -20,6 +20,7 @@ from typing import Sequence
 
 import numpy as np
 
+from .batch import read_image
 from .decoder import DecodeResult, decode_image
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
@@ -50,11 +51,9 @@ def list_fragments(folder: str | Path) -> list[Path]:
 
 
 def load_fragments(paths: Sequence[str | Path]) -> list[np.ndarray]:
-    import cv2  # type: ignore
-
     tiles: list[np.ndarray] = []
     for path in paths:
-        tile = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        tile = read_image(path)
         if tile is None:
             raise ValueError(f"无法读取碎片：{Path(path).name}")
         tiles.append(tile)
