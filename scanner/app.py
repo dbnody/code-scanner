@@ -10,7 +10,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from .decoder import DecodeResult, backend_status, decode_image
+from .decoder import DecodeResult, backend_status, decode_image, decode_image_file
 from .stitcher import list_fragments, stitch_fragments as stitch_folder
 
 
@@ -52,6 +52,7 @@ class ScannerApp(tk.Tk):
         toolbar = ttk.Frame(self, style="Card.TFrame", padding=12)
         toolbar.pack(fill="x", padx=18, pady=(0, 10))
         ttk.Button(toolbar, text="打开图片", style="Accent.TButton", command=self.open_image).pack(side="left", padx=(0, 8))
+        ttk.Button(toolbar, text="批量识别图片", style="Soft.TButton", command=self.batch_decode).pack(side="left", padx=(0, 8))
         self.camera_button = ttk.Button(toolbar, text="启动摄像头", style="Soft.TButton", command=self.toggle_camera)
         self.camera_button.pack(side="left", padx=4)
         ttk.Button(toolbar, text="拼接碎片二维码", style="Soft.TButton", command=self.stitch_fragments).pack(side="left", padx=4)
@@ -72,14 +73,16 @@ class ScannerApp(tk.Tk):
         ttk.Label(left, textvariable=self.status_var, style="Sub.TLabel").pack(anchor="w", pady=(9, 0))
 
         ttk.Label(right, text="识别结果", font=("Microsoft YaHei UI", 14, "bold"), foreground="#402a2a").pack(anchor="w", pady=(0, 8))
-        columns = ("time", "format", "text")
+        columns = ("time", "source", "format", "text")
         self.table = ttk.Treeview(right, columns=columns, show="headings", selectmode="extended")
         self.table.heading("time", text="时间")
+        self.table.heading("source", text="来源")
         self.table.heading("format", text="类型")
         self.table.heading("text", text="内容")
-        self.table.column("time", width=78, anchor="center")
-        self.table.column("format", width=92, anchor="center")
-        self.table.column("text", width=280, anchor="w")
+        self.table.column("time", width=72, anchor="center")
+        self.table.column("source", width=110, anchor="w")
+        self.table.column("format", width=88, anchor="center")
+        self.table.column("text", width=260, anchor="w")
         scroll = ttk.Scrollbar(right, orient="vertical", command=self.table.yview)
         self.table.configure(yscrollcommand=scroll.set)
         self.table.pack(side="left", fill="both", expand=True)
@@ -162,21 +165,21 @@ class ScannerApp(tk.Tk):
         except ImportError:
             self.preview.configure(text="缺少 Pillow/OpenCV，请先安装依赖", image="")
 
-    def _add_results(self, decoded: list[DecodeResult]) -> None:
+    def _add_results(self, decoded: list[DecodeResult], source: str = "", dedupe: bool = True) -> None:
         now = datetime.now().strftime("%H:%M:%S")
         for item in decoded:
-            if any(row["text"] == item.text and row["format"] == item.format_name for row in self.results):
+            if dedupe and any(row["text"] == item.text and row["format"] == item.format_name for row in self.results):
                 continue
-            row = {"time": now, "format": item.format_name, "text": item.text}
+            row = {"time": now, "source": source, "format": item.format_name, "text": item.text}
             self.results.append(row)
-            self.table.insert("", "end", values=(row["time"], row["format"], row["text"]))
+            self.table.insert("", "end", values=(row["time"], row["source"], row["format"], row["text"]))
         self.status_var.set(f"识别引擎：{backend_status()}  ·  已识别 {len(self.results)} 条")
 
     def copy_all(self) -> None:
         if not self.results:
             messagebox.showinfo("复制结果", "当前没有识别结果。")
             return
-        text = "\n".join(f"{row['format']}\t{row['text']}" for row in self.results)
+        text = "\n".join("\t".join(part for part in (row["source"], row["format"], row["text"]) if part) for row in self.results)
         self.clipboard_clear()
         self.clipboard_append(text)
         self.update()
@@ -190,7 +193,7 @@ class ScannerApp(tk.Tk):
         if not path:
             return
         with open(path, "w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=("time", "format", "text"))
+            writer = csv.DictWriter(file, fieldnames=("time", "source", "format", "text"))
             writer.writeheader()
             writer.writerows(self.results)
         self.status_var.set(f"已导出：{os.path.basename(path)}")
@@ -200,6 +203,39 @@ class ScannerApp(tk.Tk):
         for item in self.table.get_children():
             self.table.delete(item)
         self.status_var.set(f"识别引擎：{backend_status()}  ·  已识别 0 条")
+
+    def batch_decode(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="选择要识别的图片（可多选，按选择顺序展示结果）",
+            filetypes=[("图片", "*.png *.jpg *.jpeg *.bmp *.webp"), ("所有文件", "*.*")],
+        )
+        if not paths:
+            return
+        self.status_var.set(f"正在识别 {len(paths)} 张图片…")
+        threading.Thread(target=self._batch_worker, args=(list(paths),), daemon=True).start()
+
+    def _batch_worker(self, paths: list[str]) -> None:
+        items: list[tuple[str, object, list[DecodeResult]]] = []
+        failed = 0
+        for path in paths:
+            try:
+                image, decoded = decode_image_file(path)
+            except Exception:  # noqa: BLE001 - 单张图片损坏不影响其余图片
+                failed += 1
+                continue
+            items.append((os.path.basename(path), image, decoded))
+        self.after(0, lambda: self._show_batch(items, failed))
+
+    def _show_batch(self, items: list[tuple[str, object, list[DecodeResult]]], failed: int) -> None:
+        total = sum(len(decoded) for _, _, decoded in items)
+        for source, _, decoded in items:
+            self._add_results(decoded, source=source, dedupe=False)
+        if items:
+            self._show_frame(items[-1][1])
+        message = f"批量识别完成：{len(items)} 张图片，共 {total} 条结果"
+        if failed:
+            message += f"，{failed} 张读取失败"
+        self.status_var.set(message)
 
     def stitch_fragments(self) -> None:
         folder = filedialog.askdirectory(title="选择存放碎片图片的文件夹")
@@ -232,7 +268,7 @@ class ScannerApp(tk.Tk):
     def _show_stitch(self, result: object) -> None:
         self._show_frame(result.image)
         if result.decoded:
-            self._add_results(result.decoded)
+            self._add_results(result.decoded, source="碎片拼接")
             self.status_var.set(f"拼接成功：{result.rows}×{result.cols}，识别到 {len(result.decoded)} 条结果")
         else:
             self.status_var.set(
