@@ -9,11 +9,29 @@
 - **拖拽 / 粘贴 / 截图**：把图片拖进窗口、按 Ctrl+V 粘贴剪贴板截图，或框选屏幕区域直接识别
 - **文件夹递归批量**：递归扫描子目录，可按文件名或修改时间排序，显示进度、可取消，失败的图片可一键重试
 - **结果标注与预处理**：在预览图上画出每个码的位置、码制和内容，点结果行定位到对应码框；提供灰度、二值化、锐化、反色、对比度、透视校正、自动旋转开关和「普通 / 困难」两档策略，可切换预处理前后对比
+- **结构化解析与复制模板**：自动识别 URL、WiFi、vCard 名片、邮件、电话、短信、地理位置、GS1、OTPAuth，结果表带「类型」列，详情区按字段展示；支持单字段复制、选中行复制、全部复制，模板可选仅内容 / 内容+来源 / TSV / JSON / 自定义，导出时可勾选字段与格式
+- **摄像头连续扫描**：只扫画面中间区域（ROI）提速，同码冷却 N 秒内只记一次，连续 N 帧一致才确认，成功时提示音 + 预览闪烁，失败画面可一键保存
 - 调用电脑摄像头实时扫描
 - 基于 ZXing-C++ 离线识别 QR Code、Data Matrix、Aztec、PDF417、MaxiCode、Code 128、EAN/UPC 等常见码制
 - **碎片二维码拼接**：把被打乱的二维码碎片重新拼回整图并自动识别
 - 识别历史去重、复制全部结果、导出 UTF-8 BOM CSV
 - 提供 Python 源码、运行脚本和 Windows EXE 封装脚本
+
+## 结构化解析与复制模板
+
+识别结果会自动判断内容类型（链接、WiFi、名片、邮件、电话、短信、位置、GS1、动态口令、文本），结果表「类型」列显示类型，选中某行后下方的字段详情会拆出各个字段（如 WiFi 的名称/密码、名片的姓名/公司、OTPAuth 的发行方/账户/密钥）。
+- 双击字段详情里的值即可复制单个字段；
+- 「复制全部结果」按工具栏的模板输出，模板可选仅内容、内容+来源、TSV、JSON，或点「自定义模板…」写占位符（`{text}`、`{source}`、`{type}`、`{format}`、`{time}`，也可直接用字段名如 `{名称}`）；
+- 「复制选中」只复制结果表里选中的行；
+- 「导出结果」会先弹窗勾选要导出的字段（时间/来源/类型/码制/内容）和格式（CSV / TSV / JSON）。
+
+## 摄像头连续扫描
+
+摄像头设置一行可调：仅扫中间区域（ROI，画面中央 60%，速度更快）、同码冷却秒数、连续确认帧数、成功提示音。
+- 连续 N 帧都识别到同一内容才记录一次，避免手抖或反光造成的误读；
+- 冷却时间内重复扫到同一内容不会重复入表；
+- 确认成功时播放系统提示音，预览区闪一下绿色；
+- 识别不理想时点「保存当前帧」，把当前画面存成 PNG 供离线分析。
 
 ## 批量识别
 
@@ -62,7 +80,7 @@
 python main.py
 ```
 
-核心识别适配在 `scanner/decoder.py`，预处理在 `scanner/preprocess.py`，文件夹扫描在 `scanner/batch.py`，码框标注在 `scanner/annotate.py`，碎片拼接在 `scanner/stitcher.py`，界面在 `scanner/app.py`。如果没有安装 `zxing-cpp`，程序会自动回退到 OpenCV 的 QR/一维码识别器，但建议按 requirements 安装完整离线多码引擎。
+核心识别适配在 `scanner/decoder.py`，内容解析与复制模板在 `scanner/content.py`，摄像头去重/投票/ROI 在 `scanner/camera.py`，预处理在 `scanner/preprocess.py`，文件夹扫描在 `scanner/batch.py`，码框标注在 `scanner/annotate.py`，碎片拼接在 `scanner/stitcher.py`，界面在 `scanner/app.py`。如果没有安装 `zxing-cpp`，程序会自动回退到 OpenCV 的 QR/一维码识别器，但建议按 requirements 安装完整离线多码引擎。
 
 ## 测试
 
@@ -70,4 +88,4 @@ python main.py
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-`tests/test_stitcher.py` 会用 zxing-cpp 现场生成二维码、切成碎片、打乱顺序，再验证能拼回并识别出原文；`test_preprocess.py`、`test_batch_folder.py`、`test_annotate.py`、`test_batch_decode.py` 覆盖预处理、递归扫描排序、码框绘制和批量识别顺序。
+`tests/test_stitcher.py` 会用 zxing-cpp 现场生成二维码、切成碎片、打乱顺序，再验证能拼回并识别出原文；`test_preprocess.py`、`test_batch_folder.py`、`test_annotate.py`、`test_batch_decode.py` 覆盖预处理、递归扫描排序、码框绘制和批量识别顺序；`test_content.py`、`test_camera.py` 覆盖结构化解析/复制模板与摄像头投票、冷却、ROI 偏移。

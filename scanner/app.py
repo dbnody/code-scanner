@@ -6,15 +6,17 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import queue
 import threading
+import time
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 try:  # 拖拽依赖，缺失时自动降级
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -28,6 +30,8 @@ except Exception:  # noqa: BLE001
 
 from .annotate import annotate
 from .batch import is_image, read_image, relative_source, scan_folder
+from .camera import CameraGate, offset_results, roi_crop
+from .content import TEMPLATES, classify, extract_fields, render_copy, type_label
 from .decoder import DecodeResult, backend_status, decode_image
 from .preprocess import OPTION_KEYS, OPTION_LABELS, decode_with_options
 from .stitcher import list_fragments, stitch_fragments as stitch_folder
@@ -87,6 +91,44 @@ class RegionSelector(tk.Toplevel):
         self.callback(None)
 
 
+class ExportDialog(tk.Toplevel):
+    """选择要导出的字段和格式。"""
+
+    FIELDS = (("time", "时间"), ("source", "来源"), ("type", "类型"), ("format", "码制"), ("text", "内容"))
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master)
+        self.title("导出识别结果")
+        self.transient(master)
+        self.resizable(False, False)
+        self.choice: tuple[list[str], str] | None = None
+        frame = ttk.Frame(self, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="导出字段", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.vars: dict[str, tk.BooleanVar] = {}
+        for index, (key, label) in enumerate(self.FIELDS, start=1):
+            variable = tk.BooleanVar(value=True)
+            self.vars[key] = variable
+            ttk.Checkbutton(frame, text=label, variable=variable).grid(row=index, column=0, sticky="w")
+        ttk.Label(frame, text="格式", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(28, 0), pady=(0, 6))
+        self.format_var = tk.StringVar(value="CSV")
+        ttk.Combobox(frame, textvariable=self.format_var, values=("CSV", "TSV", "JSON"), width=8, state="readonly").grid(row=1, column=1, sticky="w", padx=(28, 0))
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=len(self.FIELDS) + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(buttons, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(buttons, text="导出", style="Accent.TButton", command=self._ok).pack(side="right", padx=(0, 8))
+        self.grab_set()
+        self.wait_window()
+
+    def _ok(self) -> None:
+        fields = [key for key, _label in self.FIELDS if self.vars[key].get()]
+        if not fields:
+            messagebox.showinfo("导出", "至少选择一个字段。", parent=self)
+            return
+        self.choice = (fields, self.format_var.get())
+        self.destroy()
+
+
 class ScannerApp(_Base):
     def __init__(self) -> None:
         super().__init__()
@@ -115,6 +157,14 @@ class ScannerApp(_Base):
         self.strategy_var = tk.StringVar(value="普通")
         self.sort_var = tk.StringVar(value="文件名")
         self.compare_var = tk.BooleanVar(value=False)
+        self.copy_template = tk.StringVar(value="仅内容")
+        self.custom_template = "{text}"
+        self.roi_var = tk.BooleanVar(value=True)
+        self.cooldown_var = tk.IntVar(value=3)
+        self.votes_var = tk.IntVar(value=2)
+        self.sound_var = tk.BooleanVar(value=True)
+        self.gate = CameraGate(cooldown=3, votes=2)
+        self._feedback_job: str | None = None
         self._ui_queue: queue.Queue[Any] = queue.Queue()
         self._closed = False
         self._build_style()
@@ -173,11 +223,11 @@ class ScannerApp(_Base):
         self.camera_button.pack(side="left", padx=(0, 6))
         ttk.Button(toolbar, text="拼接碎片二维码", style="Soft.TButton", command=self.stitch_fragments).pack(side="left", padx=(0, 6))
         ttk.Button(toolbar, text="复制全部结果", style="Soft.TButton", command=self.copy_all).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="导出 CSV", style="Soft.TButton", command=self.export_csv).pack(side="left", padx=(0, 6))
+        ttk.Button(toolbar, text="导出结果", style="Soft.TButton", command=self.export_csv).pack(side="left", padx=(0, 6))
         ttk.Button(toolbar, text="清空记录", style="Soft.TButton", command=self.clear_results).pack(side="right")
 
         options = ttk.Frame(self, style="Card.TFrame", padding=(12, 8))
-        options.pack(fill="x", padx=18, pady=(0, 8))
+        options.pack(fill="x", padx=18, pady=(0, 6))
         ttk.Label(options, text="预处理：", style="Sub.TLabel").pack(side="left")
         for key in OPTION_KEYS:
             ttk.Checkbutton(options, text=OPTION_LABELS[key], variable=self.option_vars[key], command=self._rerender).pack(side="left", padx=1)
@@ -188,6 +238,24 @@ class ScannerApp(_Base):
         self.retry_button.pack(side="left")
         ttk.Combobox(options, textvariable=self.sort_var, values=("文件名", "修改时间"), width=7, state="readonly").pack(side="right")
         ttk.Label(options, text="排序：", style="Sub.TLabel").pack(side="right")
+
+        camera_row = ttk.Frame(self, style="Card.TFrame", padding=(12, 8))
+        camera_row.pack(fill="x", padx=18, pady=(0, 8))
+        ttk.Label(camera_row, text="摄像头：", style="Sub.TLabel").pack(side="left")
+        ttk.Checkbutton(camera_row, text="仅扫中间区域", variable=self.roi_var).pack(side="left", padx=(0, 8))
+        ttk.Label(camera_row, text="冷却", style="Sub.TLabel").pack(side="left")
+        ttk.Spinbox(camera_row, from_=0, to=60, width=3, textvariable=self.cooldown_var).pack(side="left", padx=(2, 2))
+        ttk.Label(camera_row, text="秒", style="Sub.TLabel").pack(side="left", padx=(0, 8))
+        ttk.Label(camera_row, text="连续", style="Sub.TLabel").pack(side="left")
+        ttk.Spinbox(camera_row, from_=1, to=10, width=3, textvariable=self.votes_var).pack(side="left", padx=(2, 2))
+        ttk.Label(camera_row, text="帧确认", style="Sub.TLabel").pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(camera_row, text="提示音", variable=self.sound_var).pack(side="left", padx=(0, 8))
+        self.save_frame_button = ttk.Button(camera_row, text="保存当前帧", style="Soft.TButton", command=self.save_current_frame, state="disabled")
+        self.save_frame_button.pack(side="left", padx=(0, 12))
+        ttk.Label(camera_row, text="模板：", style="Sub.TLabel").pack(side="left")
+        ttk.Combobox(camera_row, textvariable=self.copy_template, values=tuple(TEMPLATES) + ("自定义",), width=9, state="readonly").pack(side="left", padx=(2, 6))
+        ttk.Button(camera_row, text="复制选中", style="Soft.TButton", command=self.copy_selected).pack(side="left", padx=(0, 6))
+        ttk.Button(camera_row, text="自定义模板…", style="Soft.TButton", command=self.edit_template).pack(side="left")
 
         content = ttk.Panedwindow(self, orient="horizontal")
         content.pack(fill="both", expand=True, padx=18, pady=(0, 18))
@@ -215,21 +283,34 @@ class ScannerApp(_Base):
         self.cancel_button.pack(side="left", padx=(8, 0))
 
         ttk.Label(right, text="识别结果", font=("Microsoft YaHei UI", 14, "bold"), foreground="#402a2a").pack(anchor="w", pady=(0, 8))
-        columns = ("time", "source", "format", "text")
-        self.table = ttk.Treeview(right, columns=columns, show="headings", selectmode="extended")
+        table_frame = ttk.Frame(right, style="Card.TFrame")
+        table_frame.pack(fill="both", expand=True)
+        columns = ("time", "source", "type", "format", "text")
+        self.table = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="extended")
         self.table.heading("time", text="时间")
         self.table.heading("source", text="来源")
-        self.table.heading("format", text="类型")
+        self.table.heading("type", text="类型")
+        self.table.heading("format", text="码制")
         self.table.heading("text", text="内容")
-        self.table.column("time", width=72, anchor="center")
-        self.table.column("source", width=118, anchor="w")
-        self.table.column("format", width=86, anchor="center")
-        self.table.column("text", width=252, anchor="w")
-        scroll = ttk.Scrollbar(right, orient="vertical", command=self.table.yview)
+        self.table.column("time", width=62, anchor="center")
+        self.table.column("source", width=94, anchor="w")
+        self.table.column("type", width=76, anchor="center")
+        self.table.column("format", width=72, anchor="center")
+        self.table.column("text", width=200, anchor="w")
+        scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
         self.table.configure(yscrollcommand=scroll.set)
         self.table.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         self.table.bind("<<TreeviewSelect>>", self._on_row_select)
+
+        ttk.Label(right, text="字段详情（双击值复制）", style="Sub.TLabel").pack(anchor="w", pady=(8, 2))
+        self.detail = ttk.Treeview(right, columns=("field", "value"), show="headings", height=5)
+        self.detail.heading("field", text="字段")
+        self.detail.heading("value", text="值")
+        self.detail.column("field", width=96, anchor="w")
+        self.detail.column("value", width=300, anchor="w")
+        self.detail.pack(fill="x")
+        self.detail.bind("<Double-1>", self._copy_detail_field)
 
     # ---------- 拖拽 / 粘贴 / 截图 ----------
 
@@ -509,6 +590,7 @@ class ScannerApp(_Base):
         if index >= len(self.results):
             return
         row = self.results[index]
+        self._fill_detail(row)
         image = self.previews.get(row["source"])
         if image is None:
             return
@@ -519,14 +601,29 @@ class ScannerApp(_Base):
         ]
         self._show_frame(image, results=same_source, highlight=row["position"])
 
+    def _fill_detail(self, row: dict[str, Any]) -> None:
+        for item in self.detail.get_children():
+            self.detail.delete(item)
+        self.detail.insert("", "end", values=("类型", row.get("type", "")))
+        for name, value in [("内容", row.get("text", ""))] + list(row.get("fields") or []):
+            self.detail.insert("", "end", values=(name, value))
+
     def _add_results(self, decoded: list[DecodeResult], source: str = "", dedupe: bool = True) -> None:
         now = datetime.now().strftime("%H:%M:%S")
         for item in decoded:
             if dedupe and any(row["text"] == item.text and row["format"] == item.format_name for row in self.results):
                 continue
-            row = {"time": now, "source": source, "format": item.format_name, "text": item.text, "position": item.position}
+            row = {
+                "time": now,
+                "source": source,
+                "type": type_label(classify(item.text)),
+                "format": item.format_name,
+                "text": item.text,
+                "fields": extract_fields(item.text),
+                "position": item.position,
+            }
             self.results.append(row)
-            self.table.insert("", "end", values=(row["time"], row["source"], row["format"], row["text"]))
+            self.table.insert("", "end", values=(row["time"], row["source"], row["type"], row["format"], row["text"]))
         self.status_var.set(f"识别引擎：{backend_status()}  ·  已识别 {len(self.results)} 条")
 
     def _trim_previews(self) -> None:
@@ -549,7 +646,9 @@ class ScannerApp(_Base):
             if not self.camera.isOpened():
                 raise RuntimeError("没有找到可用摄像头")
             self.camera_running = True
+            self.gate = CameraGate(cooldown=self.cooldown_var.get(), votes=self.votes_var.get())
             self.camera_button.configure(text="停止摄像头")
+            self.save_frame_button.configure(state="normal")
             self._camera_tick()
         except ImportError:
             messagebox.showerror("缺少依赖", "请先运行 install_windows.bat 安装识别依赖。")
@@ -563,10 +662,14 @@ class ScannerApp(_Base):
         if ok:
             self.last_frame = frame
             self._show_frame(frame, results=self.camera_results)
-            self._decode_frame_async(frame)
+            if self.roi_var.get():
+                region, (dx, dy) = roi_crop(frame)
+            else:
+                region, (dx, dy) = frame, (0, 0)
+            self._decode_frame_async(region, dx, dy)
         self.after(120, self._camera_tick)
 
-    def _decode_frame_async(self, frame: Any) -> None:
+    def _decode_frame_async(self, frame: Any, dx: int = 0, dy: int = 0) -> None:
         snapshot = frame.copy()
 
         def worker() -> None:
@@ -577,20 +680,62 @@ class ScannerApp(_Base):
                 self._post(lambda: self.status_var.set(f"识别失败：{error_text}"))
                 return
             if decoded:
-                self._post(lambda: self._on_camera_results(decoded))
+                self._post(lambda: self._on_camera_results(offset_results(decoded, dx, dy)))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_camera_results(self, decoded: list[DecodeResult]) -> None:
         self.camera_results = decoded
-        self._add_results(decoded, source="摄像头", dedupe=True)
+        confirmed = self.gate.observe(decoded, time.monotonic())
+        if confirmed:
+            self._add_results(confirmed, source="摄像头", dedupe=False)
+            self._feedback()
         if self.last_frame is not None:
             self._show_frame(self.last_frame, results=decoded)
+
+    def _feedback(self) -> None:
+        if self.sound_var.get():
+            try:
+                import winsound
+
+                winsound.MessageBeep(winsound.MB_OK)
+            except Exception:  # noqa: BLE001 - 没有声音设备不影响扫码
+                pass
+        self.preview.configure(bg="#d5f5cf")
+        if self._feedback_job is not None:
+            self.after_cancel(self._feedback_job)
+        self._feedback_job = self.after(180, lambda: self.preview.configure(bg="#fff2ed"))
+
+    def save_current_frame(self) -> None:
+        if self.last_frame is None:
+            messagebox.showinfo("保存当前帧", "还没有摄像头画面，先启动摄像头。")
+            return
+        path = filedialog.asksaveasfilename(
+            title="保存当前帧",
+            defaultextension=".png",
+            filetypes=[("PNG 图片", "*.png"), ("JPEG 图片", "*.jpg")],
+            initialfile=f"frame-{datetime.now().strftime('%H%M%S')}.png",
+        )
+        if not path:
+            return
+        try:
+            import cv2
+
+            ok, buffer = cv2.imencode(Path(path).suffix or ".png", self.last_frame)
+            if not ok:
+                raise ValueError("编码失败")
+            buffer.tofile(path)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("保存失败", str(exc))
+            return
+        self.status_var.set(f"已保存当前帧：{os.path.basename(path)}")
 
     def _stop_camera(self) -> None:
         self.camera_running = False
         self.camera_results = []
+        self.gate.reset()
         self.camera_button.configure(text="启动摄像头")
+        self.save_frame_button.configure(state="disabled")
         if self.camera is not None:
             self.camera.release()
             self.camera = None
@@ -647,24 +792,78 @@ class ScannerApp(_Base):
         if not self.results:
             messagebox.showinfo("复制结果", "当前没有识别结果。")
             return
-        text = "\n".join("\t".join(part for part in (row["source"], row["format"], row["text"]) if part) for row in self.results)
+        self._copy_text(self._render_copy(self.results), "已复制全部结果到剪贴板")
+
+    def copy_selected(self) -> None:
+        selection = self.table.selection()
+        if not selection:
+            messagebox.showinfo("复制结果", "请先选中一行或多行结果。")
+            return
+        rows = [self.results[self.table.index(item)] for item in selection if self.table.index(item) < len(self.results)]
+        self._copy_text(self._render_copy(rows), f"已复制 {len(rows)} 行结果")
+
+    def _copy_detail_field(self, _event: Any = None) -> None:
+        selection = self.detail.selection()
+        if not selection:
+            return
+        values = self.detail.item(selection[0], "values")
+        self._copy_text(str(values[1]), f"已复制字段：{values[0]}")
+
+    def edit_template(self) -> None:
+        template = simpledialog.askstring(
+            "自定义模板",
+            "可用占位符：{text} {source} {type} {format} {time} {fields}，也可直接写字段名，如 {名称}",
+            initialvalue=self.custom_template,
+            parent=self,
+        )
+        if template is None:
+            return
+        self.custom_template = template
+        self.copy_template.set("自定义")
+        self.status_var.set("自定义模板已更新")
+
+    def _render_copy(self, rows: list[dict[str, Any]]) -> str:
+        return render_copy(rows, self.copy_template.get(), self.custom_template)
+
+    def _copy_text(self, text: str, message: str) -> None:
         self.clipboard_clear()
         self.clipboard_append(text)
         self.update()
-        self.status_var.set("已复制全部结果到剪贴板")
+        self.status_var.set(message)
 
     def export_csv(self) -> None:
         if not self.results:
             messagebox.showinfo("导出结果", "当前没有识别结果。")
             return
-        path = filedialog.asksaveasfilename(title="导出识别结果", defaultextension=".csv", filetypes=[("CSV 文件", "*.csv")], initialfile="扫码结果.csv")
+        dialog = ExportDialog(self)
+        if dialog.choice is None:
+            return
+        fields, fmt = dialog.choice
+        extension = ".json" if fmt == "JSON" else ".csv" if fmt == "CSV" else ".tsv"
+        path = filedialog.asksaveasfilename(
+            title="导出识别结果",
+            defaultextension=extension,
+            filetypes=[(f"{fmt} 文件", f"*{extension}")],
+            initialfile=f"扫码结果{extension}",
+        )
         if not path:
             return
-        with open(path, "w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=("time", "source", "format", "text"), extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(self.results)
+        self._write_export(path, fields, fmt)
         self.status_var.set(f"已导出：{os.path.basename(path)}")
+
+    def _write_export(self, path: str, fields: list[str], fmt: str) -> None:
+        labels = {"time": "时间", "source": "来源", "type": "类型", "format": "码制", "text": "内容"}
+        if fmt == "JSON":
+            payload = [{key: row.get(key, "") for key in fields} for row in self.results]
+            with open(path, "w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+            return
+        delimiter = "\t" if fmt == "TSV" else ","
+        with open(path, "w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.writer(file, delimiter=delimiter)
+            writer.writerow([labels[key] for key in fields])
+            for row in self.results:
+                writer.writerow([row.get(key, "") for key in fields])
 
     def clear_results(self) -> None:
         self.results.clear()
@@ -672,6 +871,8 @@ class ScannerApp(_Base):
         self.failed.clear()
         for item in self.table.get_children():
             self.table.delete(item)
+        for item in self.detail.get_children():
+            self.detail.delete(item)
         self.retry_button.configure(text="重试失败 (0)", state="disabled")
         self.current_image = None
         self.current_decoded = []
