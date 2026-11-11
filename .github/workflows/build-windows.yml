@@ -6,6 +6,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -32,3 +35,10 @@ jobs:
         with:
           name: CodeScanner-windows
           path: dist/CodeScanner.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CodeScanner.exe
+          generate_release_notes: true
