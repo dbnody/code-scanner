@@ -2,6 +2,10 @@
 
 一个运行在 Windows 电脑上的离线扫码桌面程序，不是微信小程序。图片和摄像头帧只在本机处理，不上传网络。
 
+## 下载
+
+不想装 Python 的话，到 [Releases](https://github.com/dbnody/code-scanner/releases/latest) 下载 `CodeScanner.exe`，双击即用，完全离线。
+
 ## 功能
 
 - 打开 PNG/JPG/BMP/WEBP 图片，一次识别图片中的多个码
@@ -14,7 +18,7 @@
 - 调用电脑摄像头实时扫描
 - 基于 ZXing-C++ 离线识别 QR Code、Data Matrix、Aztec、PDF417、MaxiCode、Code 128、EAN/UPC 等常见码制
 - **碎片二维码拼接**：把被打乱的二维码碎片重新拼回整图并自动识别
-- 识别历史去重、复制全部结果、导出 UTF-8 BOM CSV
+- 识别历史去重、按模板复制结果、导出 CSV / TSV / JSON（导出前可勾选字段）
 - 提供 Python 源码、运行脚本和 Windows EXE 封装脚本
 
 ## 结构化解析与复制模板
