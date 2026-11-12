@@ -28,6 +28,7 @@ except Exception:  # noqa: BLE001
     _DND = False
     _Base = tk.Tk
 
+from . import theme
 from .annotate import annotate
 from .batch import is_image, read_image, relative_source, scan_folder
 from .camera import CameraGate, offset_results, roi_crop
@@ -99,18 +100,20 @@ class ExportDialog(tk.Toplevel):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master)
         self.title("导出识别结果")
+        self.configure(bg=theme.CARD)
+        theme.set_window_icon(self)
         self.transient(master)
         self.resizable(False, False)
         self.choice: tuple[list[str], str] | None = None
         frame = ttk.Frame(self, padding=16)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="导出字段", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(frame, text="导出字段", style="Head.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
         self.vars: dict[str, tk.BooleanVar] = {}
         for index, (key, label) in enumerate(self.FIELDS, start=1):
             variable = tk.BooleanVar(value=True)
             self.vars[key] = variable
             ttk.Checkbutton(frame, text=label, variable=variable).grid(row=index, column=0, sticky="w")
-        ttk.Label(frame, text="格式", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(28, 0), pady=(0, 6))
+        ttk.Label(frame, text="导出格式", style="Head.TLabel").grid(row=0, column=1, sticky="w", padx=(28, 0), pady=(0, 6))
         self.format_var = tk.StringVar(value="CSV")
         ttk.Combobox(frame, textvariable=self.format_var, values=("CSV", "TSV", "JSON"), width=8, state="readonly").grid(row=1, column=1, sticky="w", padx=(28, 0))
         buttons = ttk.Frame(frame)
@@ -133,9 +136,9 @@ class ScannerApp(_Base):
     def __init__(self) -> None:
         super().__init__()
         self.title("离线扫码 · 多码识别")
-        self.geometry("1180x760")
-        self.minsize(960, 620)
-        self.configure(bg="#fff8f2")
+        self.geometry("1240x812")
+        self.minsize(1000, 640)
+        self.configure(bg=theme.BG)
         self.camera = None
         self.camera_running = False
         self.camera_results: list[DecodeResult] = []
@@ -194,117 +197,134 @@ class ScannerApp(_Base):
         self.after(60, self._drain_queue)
 
     def _build_style(self) -> None:
-        style = ttk.Style(self)
-        try:
-            style.theme_use("vista")
-        except tk.TclError:
-            pass
-        style.configure("Title.TLabel", background="#fff8f2", foreground="#402a2a", font=("Microsoft YaHei UI", 20, "bold"))
-        style.configure("Sub.TLabel", background="#fff8f2", foreground="#806c6c", font=("Microsoft YaHei UI", 10))
-        style.configure("Card.TFrame", background="#ffffff")
-        style.configure("Accent.TButton", background="#ff7b72", foreground="#ffffff", padding=(14, 8), font=("Microsoft YaHei UI", 10, "bold"))
-        style.map("Accent.TButton", background=[("active", "#ef665e")])
-        style.configure("Soft.TButton", padding=(10, 6), font=("Microsoft YaHei UI", 9))
+        theme.apply(self)
 
     def _build_ui(self) -> None:
-        header = ttk.Frame(self, style="Card.TFrame", padding=(22, 16, 22, 12))
-        header.pack(fill="x", padx=18, pady=(18, 8))
-        ttk.Label(header, text="✨ 离线扫码", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(header, text="拖拽 / 粘贴 / 截图 · 批量与文件夹识别 · 完全离线，不上传图片", style="Sub.TLabel").pack(anchor="w", pady=(4, 0))
+        theme.set_window_icon(self)
+        page = tk.Frame(self, bg=theme.BG)
+        page.pack(fill="both", expand=True)
 
-        toolbar = ttk.Frame(self, style="Card.TFrame", padding=(12, 10))
-        toolbar.pack(fill="x", padx=18, pady=(0, 6))
+        header = theme.card(page, padx=16, pady=11)
+        header.pack(fill="x", padx=14, pady=(12, 8))
+        picture = theme.logo(header, 46)
+        if picture is not None:
+            logo_label = tk.Label(header, image=picture, bg=theme.CARD)
+            logo_label.image = picture
+            logo_label.pack(side="left", padx=(0, 14))
+        titles = tk.Frame(header, bg=theme.CARD)
+        titles.pack(side="left")
+        tk.Label(titles, text="离线扫码", bg=theme.CARD, fg=theme.TEXT, font=(theme.FONT, 20, "bold")).pack(anchor="w")
+        tk.Label(
+            titles,
+            text="拖拽 / 粘贴 / 截图 · 批量与文件夹识别 · 图片只在本机处理",
+            bg=theme.CARD,
+            fg=theme.MUTED,
+            font=(theme.FONT, 9),
+        ).pack(anchor="w", pady=(3, 0))
+        chips = tk.Frame(header, bg=theme.CARD)
+        chips.pack(side="right")
+        theme.chip(chips, "● 完全离线").pack(side="left", padx=(0, 6))
+        theme.chip(chips, f"引擎 {backend_status()}").pack(side="left")
+
+        toolbar = theme.card(page, padx=9, pady=7)
+        toolbar.pack(fill="x", padx=14, pady=(0, 7))
         ttk.Button(toolbar, text="打开图片", style="Accent.TButton", command=self.open_image).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="批量识别图片", style="Soft.TButton", command=self.batch_decode).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="扫描文件夹", style="Soft.TButton", command=self.scan_folder_dialog).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="截图扫码", style="Soft.TButton", command=self.screenshot).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="粘贴图片", style="Soft.TButton", command=self.paste_clipboard).pack(side="left", padx=(0, 6))
+        for text, command in (
+            ("批量识别图片", self.batch_decode),
+            ("扫描文件夹", self.scan_folder_dialog),
+            ("截图扫码", self.screenshot),
+            ("粘贴图片", self.paste_clipboard),
+        ):
+            ttk.Button(toolbar, text=text, style="Soft.TButton", command=command).pack(side="left", padx=(0, 6))
         self.camera_button = ttk.Button(toolbar, text="启动摄像头", style="Soft.TButton", command=self.toggle_camera)
         self.camera_button.pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="拼接碎片二维码", style="Soft.TButton", command=self.stitch_fragments).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="复制全部结果", style="Soft.TButton", command=self.copy_all).pack(side="left", padx=(0, 6))
-        ttk.Button(toolbar, text="导出结果", style="Soft.TButton", command=self.export_csv).pack(side="left", padx=(0, 6))
+        for text, command in (("拼接碎片", self.stitch_fragments), ("复制全部", self.copy_all), ("导出结果", self.export_csv)):
+            ttk.Button(toolbar, text=text, style="Soft.TButton", command=command).pack(side="left", padx=(0, 6))
         ttk.Button(toolbar, text="清空记录", style="Soft.TButton", command=self.clear_results).pack(side="right")
 
-        options = ttk.Frame(self, style="Card.TFrame", padding=(12, 8))
-        options.pack(fill="x", padx=18, pady=(0, 6))
-        ttk.Label(options, text="预处理：", style="Sub.TLabel").pack(side="left")
+        options = theme.card(page, padx=11, pady=6)
+        options.pack(fill="x", padx=14, pady=(0, 5))
+        tk.Label(options, text="预处理", bg=theme.CARD, fg=theme.ACCENT_DARK, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(0, 8))
         for key in OPTION_KEYS:
             ttk.Checkbutton(options, text=OPTION_LABELS[key], variable=self.option_vars[key], command=self._rerender).pack(side="left", padx=1)
-        ttk.Label(options, text="  策略：", style="Sub.TLabel").pack(side="left")
-        ttk.Combobox(options, textvariable=self.strategy_var, values=("普通", "困难"), width=5, state="readonly").pack(side="left", padx=(2, 8))
+        ttk.Separator(options, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Label(options, text="策略", style="Sub.TLabel").pack(side="left")
+        ttk.Combobox(options, textvariable=self.strategy_var, values=("普通", "困难"), width=5, state="readonly").pack(side="left", padx=(4, 10))
         ttk.Checkbutton(options, text="前后对比", variable=self.compare_var, command=self._rerender).pack(side="left", padx=(0, 10))
         self.retry_button = ttk.Button(options, text="重试失败 (0)", style="Soft.TButton", command=self.retry_failed, state="disabled")
         self.retry_button.pack(side="left")
         ttk.Combobox(options, textvariable=self.sort_var, values=("文件名", "修改时间"), width=7, state="readonly").pack(side="right")
-        ttk.Label(options, text="排序：", style="Sub.TLabel").pack(side="right")
+        ttk.Label(options, text="排序", style="Sub.TLabel").pack(side="right", padx=(0, 4))
 
-        camera_row = ttk.Frame(self, style="Card.TFrame", padding=(12, 8))
-        camera_row.pack(fill="x", padx=18, pady=(0, 8))
-        ttk.Label(camera_row, text="摄像头：", style="Sub.TLabel").pack(side="left")
+        camera_row = theme.card(page, padx=11, pady=6)
+        camera_row.pack(fill="x", padx=14, pady=(0, 8))
+        tk.Label(camera_row, text="摄像头", bg=theme.CARD, fg=theme.ACCENT_DARK, font=(theme.FONT, 9, "bold")).pack(side="left", padx=(0, 8))
         ttk.Checkbutton(camera_row, text="仅扫中间区域", variable=self.roi_var).pack(side="left", padx=(0, 8))
         ttk.Label(camera_row, text="冷却", style="Sub.TLabel").pack(side="left")
-        ttk.Spinbox(camera_row, from_=0, to=60, width=3, textvariable=self.cooldown_var).pack(side="left", padx=(2, 2))
+        ttk.Spinbox(camera_row, from_=0, to=60, width=3, textvariable=self.cooldown_var).pack(side="left", padx=(4, 3))
         ttk.Label(camera_row, text="秒", style="Sub.TLabel").pack(side="left", padx=(0, 8))
         ttk.Label(camera_row, text="连续", style="Sub.TLabel").pack(side="left")
-        ttk.Spinbox(camera_row, from_=1, to=10, width=3, textvariable=self.votes_var).pack(side="left", padx=(2, 2))
+        ttk.Spinbox(camera_row, from_=1, to=10, width=3, textvariable=self.votes_var).pack(side="left", padx=(4, 3))
         ttk.Label(camera_row, text="帧确认", style="Sub.TLabel").pack(side="left", padx=(0, 8))
-        ttk.Checkbutton(camera_row, text="提示音", variable=self.sound_var).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(camera_row, text="提示音", variable=self.sound_var).pack(side="left")
         self.save_frame_button = ttk.Button(camera_row, text="保存当前帧", style="Soft.TButton", command=self.save_current_frame, state="disabled")
-        self.save_frame_button.pack(side="left", padx=(0, 12))
-        ttk.Label(camera_row, text="模板：", style="Sub.TLabel").pack(side="left")
-        ttk.Combobox(camera_row, textvariable=self.copy_template, values=tuple(TEMPLATES) + ("自定义",), width=9, state="readonly").pack(side="left", padx=(2, 6))
+        self.save_frame_button.pack(side="left", padx=(8, 0))
+        ttk.Separator(camera_row, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Label(camera_row, text="复制模板", style="Sub.TLabel").pack(side="left", padx=(0, 4))
+        ttk.Combobox(camera_row, textvariable=self.copy_template, values=tuple(TEMPLATES) + ("自定义",), width=9, state="readonly").pack(side="left", padx=(0, 6))
         ttk.Button(camera_row, text="复制选中", style="Soft.TButton", command=self.copy_selected).pack(side="left", padx=(0, 6))
         ttk.Button(camera_row, text="自定义模板…", style="Soft.TButton", command=self.edit_template).pack(side="left")
 
-        content = ttk.Panedwindow(self, orient="horizontal")
-        content.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        left = ttk.Frame(content, style="Card.TFrame", padding=12)
-        right = ttk.Frame(content, style="Card.TFrame", padding=12)
-        content.add(left, weight=3)
-        content.add(right, weight=2)
+        content = ttk.Panedwindow(page, orient="horizontal")
+        content.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        left = theme.card(content, padx=8, pady=8)
+        right = theme.card(content, padx=10, pady=8)
+        content.add(left, weight=5)
+        content.add(right, weight=3)
 
         self.preview = tk.Label(
             left,
-            text="把图片拖到这里，或按 Ctrl+V 粘贴截图\n识别过程完全在本机完成",
-            bg="#fff2ed",
-            fg="#a98f88",
-            font=("Microsoft YaHei UI", 14),
+            text="把图片拖到这里，或按 Ctrl+V 粘贴截图\n\n识别全程在本机完成，不上传任何图片",
+            bg=theme.CARD_ALT,
+            fg=theme.MUTED,
+            font=(theme.FONT, 11),
             justify="center",
         )
         self.preview.pack(fill="both", expand=True)
-        self.status_var = tk.StringVar(value=f"识别引擎：{backend_status()}")
-        ttk.Label(left, textvariable=self.status_var, style="Sub.TLabel").pack(anchor="w", pady=(9, 0))
-        bar_row = ttk.Frame(left, style="Card.TFrame")
+        self.status_var = tk.StringVar(value="就绪 · 拖入图片、粘贴截图或点「打开图片」开始")
+        tk.Label(left, textvariable=self.status_var, bg=theme.CARD, fg=theme.MUTED, anchor="w", font=(theme.FONT, 9)).pack(fill="x", pady=(9, 0))
+        bar_row = tk.Frame(left, bg=theme.CARD)
         bar_row.pack(fill="x", pady=(6, 0))
         self.progress = ttk.Progressbar(bar_row, mode="determinate", maximum=1, value=0)
         self.progress.pack(side="left", fill="x", expand=True)
         self.cancel_button = ttk.Button(bar_row, text="取消", style="Soft.TButton", command=self.cancel_batch, state="disabled")
         self.cancel_button.pack(side="left", padx=(8, 0))
 
-        ttk.Label(right, text="识别结果", font=("Microsoft YaHei UI", 14, "bold"), foreground="#402a2a").pack(anchor="w", pady=(0, 8))
-        table_frame = ttk.Frame(right, style="Card.TFrame")
+        tk.Label(right, text="识别结果", bg=theme.CARD, fg=theme.TEXT, font=(theme.FONT, 13, "bold")).pack(anchor="w", pady=(0, 8))
+        table_frame = tk.Frame(right, bg=theme.CARD)
         table_frame.pack(fill="both", expand=True)
         columns = ("time", "source", "type", "format", "text")
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="extended")
+        self.table.tag_configure("odd", background=theme.CARD)
+        self.table.tag_configure("even", background=theme.ROW_ALT)
         self.table.heading("time", text="时间")
         self.table.heading("source", text="来源")
         self.table.heading("type", text="类型")
         self.table.heading("format", text="码制")
         self.table.heading("text", text="内容")
-        self.table.column("time", width=62, anchor="center")
-        self.table.column("source", width=94, anchor="w")
-        self.table.column("type", width=76, anchor="center")
-        self.table.column("format", width=72, anchor="center")
-        self.table.column("text", width=200, anchor="w")
+        self.table.column("time", width=64, minwidth=60, anchor="center", stretch=False)
+        self.table.column("source", width=82, minwidth=70, anchor="w")
+        self.table.column("type", width=58, minwidth=52, anchor="center", stretch=False)
+        self.table.column("format", width=58, minwidth=52, anchor="center", stretch=False)
+        self.table.column("text", width=190, minwidth=120, anchor="w")
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
         self.table.configure(yscrollcommand=scroll.set)
         self.table.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         self.table.bind("<<TreeviewSelect>>", self._on_row_select)
 
-        ttk.Label(right, text="字段详情（双击值复制）", style="Sub.TLabel").pack(anchor="w", pady=(8, 2))
-        self.detail = ttk.Treeview(right, columns=("field", "value"), show="headings", height=5)
+        tk.Label(right, text="字段详情 · 双击值复制", bg=theme.CARD, fg=theme.MUTED, font=(theme.FONT, 9)).pack(anchor="w", pady=(10, 4))
+        self.detail = ttk.Treeview(right, columns=("field", "value"), show="headings", height=4, style="Detail.Treeview")
         self.detail.heading("field", text="字段")
         self.detail.heading("value", text="值")
         self.detail.column("field", width=96, anchor="w")
@@ -601,12 +621,18 @@ class ScannerApp(_Base):
         ]
         self._show_frame(image, results=same_source, highlight=row["position"])
 
+    @staticmethod
+    def _one_line(text: Any) -> str:
+        """表格一行显示：把换行压成 ⏎，避免多行文字压到邻行。"""
+        parts = [part.strip() for part in str(text).replace("\r", "\n").split("\n")]
+        return " ⏎ ".join(part for part in parts if part)
+
     def _fill_detail(self, row: dict[str, Any]) -> None:
         for item in self.detail.get_children():
             self.detail.delete(item)
         self.detail.insert("", "end", values=("类型", row.get("type", "")))
         for name, value in [("内容", row.get("text", ""))] + list(row.get("fields") or []):
-            self.detail.insert("", "end", values=(name, value))
+            self.detail.insert("", "end", values=(name, self._one_line(value)))
 
     def _add_results(self, decoded: list[DecodeResult], source: str = "", dedupe: bool = True) -> None:
         now = datetime.now().strftime("%H:%M:%S")
@@ -623,7 +649,13 @@ class ScannerApp(_Base):
                 "position": item.position,
             }
             self.results.append(row)
-            self.table.insert("", "end", values=(row["time"], row["source"], row["type"], row["format"], row["text"]))
+            tag = "even" if len(self.results) % 2 == 0 else "odd"
+            self.table.insert(
+                "",
+                "end",
+                values=(row["time"], row["source"], row["type"], row["format"], self._one_line(row["text"])),
+                tags=(tag,),
+            )
         self.status_var.set(f"识别引擎：{backend_status()}  ·  已识别 {len(self.results)} 条")
 
     def _trim_previews(self) -> None:
@@ -701,10 +733,10 @@ class ScannerApp(_Base):
                 winsound.MessageBeep(winsound.MB_OK)
             except Exception:  # noqa: BLE001 - 没有声音设备不影响扫码
                 pass
-        self.preview.configure(bg="#d5f5cf")
+        self.preview.configure(bg="#d9f5e4")
         if self._feedback_job is not None:
             self.after_cancel(self._feedback_job)
-        self._feedback_job = self.after(180, lambda: self.preview.configure(bg="#fff2ed"))
+        self._feedback_job = self.after(180, lambda: self.preview.configure(bg=theme.CARD_ALT))
 
     def save_current_frame(self) -> None:
         if self.last_frame is None:
@@ -878,7 +910,12 @@ class ScannerApp(_Base):
         self.current_decoded = []
         self.original_image = None
         self.processed_image = None
-        self.preview.configure(image="", text="把图片拖到这里，或按 Ctrl+V 粘贴截图\n识别过程完全在本机完成")
+        self.preview.configure(
+            bg=theme.CARD_ALT,
+            fg=theme.MUTED,
+            image="",
+            text="把图片拖到这里，或按 Ctrl+V 粘贴截图\n\n识别全程在本机完成，不上传任何图片",
+        )
         self.preview_image = None
         self.status_var.set(f"识别引擎：{backend_status()}  ·  已识别 0 条")
 

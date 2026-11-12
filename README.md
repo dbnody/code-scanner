@@ -2,6 +2,8 @@
 
 一个运行在 Windows 电脑上的离线扫码桌面程序，不是微信小程序。图片和摄像头帧只在本机处理，不上传网络。
 
+![界面截图](docs/screenshot.png)
+
 ## 下载
 
 不想装 Python 的话，到 [Releases](https://github.com/dbnody/code-scanner/releases/latest) 下载 `CodeScanner.exe`，双击即用，完全离线。
@@ -84,7 +86,7 @@
 python main.py
 ```
 
-核心识别适配在 `scanner/decoder.py`，内容解析与复制模板在 `scanner/content.py`，摄像头去重/投票/ROI 在 `scanner/camera.py`，预处理在 `scanner/preprocess.py`，文件夹扫描在 `scanner/batch.py`，码框标注在 `scanner/annotate.py`，碎片拼接在 `scanner/stitcher.py`，界面在 `scanner/app.py`。如果没有安装 `zxing-cpp`，程序会自动回退到 OpenCV 的 QR/一维码识别器，但建议按 requirements 安装完整离线多码引擎。
+核心识别适配在 `scanner/decoder.py`，界面配色与控件样式在 `scanner/theme.py`（改配色只动这一个文件），内容解析与复制模板在 `scanner/content.py`，摄像头去重/投票/ROI 在 `scanner/camera.py`，预处理在 `scanner/preprocess.py`，文件夹扫描在 `scanner/batch.py`，码框标注在 `scanner/annotate.py`，碎片拼接在 `scanner/stitcher.py`，界面在 `scanner/app.py`。程序图标由 `tools/make_icon.py` 生成（`assets/icon.ico` / `icon.png`），换图标改脚本后重跑即可。如果没有安装 `zxing-cpp`，程序会自动回退到 OpenCV 的 QR/一维码识别器，但建议按 requirements 安装完整离线多码引擎。
 
 ## 测试
 
