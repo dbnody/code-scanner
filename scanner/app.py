@@ -66,14 +66,13 @@ class RegionSelector(tk.Toplevel):
 
     def _press(self, event: tk.Event) -> None:
         self.start = (event.x_root, event.y_root)
-        self.rect = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="#ff5c52", width=3)
+        self.rect = self.canvas.create_rectangle(event.x_root, event.y_root, event.x_root, event.y_root, outline="#ff5c52", width=3)
 
     def _drag(self, event: tk.Event) -> None:
         if self.start is None or self.rect is None:
             return
         x0, y0 = self.start
         self.canvas.coords(self.rect, x0, y0, event.x_root, event.y_root)
-        self.canvas.configure(cursor="cross")
 
     def _release(self, event: tk.Event) -> None:
         if self.start is None:
@@ -407,7 +406,14 @@ class ScannerApp(_Base):
             from PIL import ImageGrab
             import numpy as np
 
-            image = np.array(ImageGrab.grab(bbox=bbox).convert("RGB"))[:, :, ::-1].copy()
+            from .screen import expand_box, screen_scale, to_physical
+
+            # 先整屏抓一次：既拿到物理尺寸用于换算 DPI 比例，也避免二次抓屏时画面变化
+            # ponytail: 假定各显示器缩放一致；多屏混合缩放时改用 GetDpiForMonitor 逐屏换算
+            full = ImageGrab.grab(all_screens=True)
+            scale_x, scale_y = screen_scale((self.winfo_vrootwidth(), self.winfo_vrootheight()), full.size)
+            box = to_physical(expand_box(bbox), scale_x, scale_y, full.size)
+            image = np.array(full.crop(box).convert("RGB"))[:, :, ::-1].copy()
         except Exception as exc:  # noqa: BLE001
             self.deiconify()
             messagebox.showerror("截图失败", str(exc))
